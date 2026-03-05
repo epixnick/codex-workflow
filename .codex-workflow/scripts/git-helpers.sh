@@ -119,6 +119,13 @@ cmd_wait_required_checks() {
       return 0
     fi
 
+    # If the repository has no required checks configured, treat it as pass.
+    if grep -qi "no checks reported" /tmp/codex-workflow-pr-checks.log; then
+      cat /tmp/codex-workflow-pr-checks.log
+      log "No required checks configured; treating as pass for required_checks=all_required"
+      return 0
+    fi
+
     now="$(date +%s)"
     elapsed="$((now - start))"
 
