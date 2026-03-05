@@ -19,29 +19,140 @@ Der Workflow soll eine Story automatisch durch folgende Phasen bewegen:
 
 Alles ist über `.codex-workflow/config.yaml` steuerbar.
 
-## Schnellstart
+## Installation und erster Run (einfach)
 
 Voraussetzungen:
 
 - Node.js 18+
-- pnpm
 - git
 - gh (GitHub CLI)
 - codex CLI
+- projektabhängige Toolchain für `verification_commands` (Default: pnpm)
+- Git-Remote `origin` und Branch `main` müssen existieren (mit mindestens einem Commit)
 
-Setup:
+### 1) Muss ich den Ordner ins Repo kopieren?
+
+Ja. Der Workflow funktioniert nur, wenn der Ordner `.codex-workflow/` im **Root deines Ziel-Repos** liegt.
+
+Wenn du dieses Scaffold in ein anderes Repo übernehmen willst:
 
 ```bash
-pnpm install --frozen-lockfile
+cp -R /pfad/zu/codex-workflow/.codex-workflow /pfad/zu/deinem-repo/
+cd /pfad/zu/deinem-repo
+mkdir -p .codex-workflow/runs
+touch .codex-workflow/runs/.gitkeep
+```
+
+Empfohlen für `.gitignore` im Ziel-Repo:
+
+```gitignore
+.codex-workflow/runs/*
+!.codex-workflow/runs/.gitkeep
+```
+
+### 2) Auth einrichten
+
+```bash
 codex login
 codex login status
 gh auth status
 ```
 
-Run:
+### 3) Projekt-Verification anpassen
+
+In `.codex-workflow/config.yaml` muss `verification_commands` zu deinem Projekt passen.
+
+Default (pnpm):
+
+```yaml
+verification_commands:
+  - "pnpm install --frozen-lockfile"
+  - "pnpm build"
+  - "pnpm typecheck"
+  - "pnpm test"
+```
+
+Wenn dein Projekt kein pnpm nutzt, diese Liste ersetzen.
+
+### 4) Erste Story anlegen
+
+Du brauchst immer **zwei Stellen** mit exakt gleichem `id` + `slug`:
+
+1. Eintrag in `.codex-workflow/stories.yaml`
+2. Story-Datei in `.codex-workflow/input/{id}-{slug}.md`
+
+Namensregeln:
+
+- `id`: am besten dreistellig, aufsteigend (`001`, `002`, `003`, ...)
+- `slug`: lowercase-kebab-case (z. B. `auth-refactor`)
+- Input-Dateiname: exakt `{id}-{slug}.md` (z. B. `001-auth-refactor.md`)
+
+Beispiel `stories.yaml`:
+
+```yaml
+stories:
+  - id: "001"
+    slug: "auth-refactor"
+    title: "Auth Refactor"
+    status: "todo"
+    depends_on: []
+```
+
+Beispiel Story-Datei:
+
+- Pfad: `.codex-workflow/input/001-auth-refactor.md`
+- Inhalt: Ziel, Scope, Acceptance Criteria (frei formulierbar)
+
+### 5) Workflow starten
+
+Im Repo-Root:
 
 ```bash
 node .codex-workflow/scripts/orchestrator.js
+```
+
+Der Orchestrator nimmt automatisch die nächste Story mit `status: todo`, deren `depends_on` erfüllt sind.
+
+### 6) Wo liegen Ergebnisse?
+
+Pro Story-Run in:
+
+- `.codex-workflow/runs/{id}-{slug}/`
+
+Dort liegen u. a.:
+
+- `story.md`
+- `plan.md`
+- `plan_review.md`
+- `dev_plan_ack.md`
+- `diff_review.md`
+- `verify_report.md`
+- `publish_summary.md`
+- `pending_question_{N}.json` (falls Decision Q&A)
+- `TIMEOUT_REPORT.md` (bei Q&A-Timeout in `full_auto`)
+
+### 7) Mehrere Storys korrekt benennen
+
+Empfehlung:
+
+- `001-...`, `002-...`, `003-...` fortlaufend
+- pro Story genau ein Input-File mit gleichem `id`/`slug` wie in `stories.yaml`
+- `depends_on` mit Story-IDs füllen, wenn Reihenfolge erzwungen werden soll
+
+Beispiel:
+
+```yaml
+stories:
+  - id: "001"
+    slug: "project-bootstrap"
+    title: "Project Bootstrap"
+    status: "done"
+    depends_on: []
+  - id: "002"
+    slug: "auth-refactor"
+    title: "Auth Refactor"
+    status: "todo"
+    depends_on: ["001"]
 ```
 
 ## Repo-Struktur
