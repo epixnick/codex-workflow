@@ -16,3 +16,4 @@ models:
   publisher: "gpt-5.3-codex"   # TODO: replace model alias / wire to real endpoint
 qa_timeout_seconds: 3600
 full_auto: false
+ci_timeout_seconds: 120
