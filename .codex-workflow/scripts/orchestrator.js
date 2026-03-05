@@ -3,6 +3,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const readline = require("readline");
 const { spawnSync } = require("child_process");
 
@@ -33,9 +34,21 @@ const DEFAULT_CONFIG = {
     planner: "gpt-5.2", // TODO: replace model alias / wire to real endpoint
     plan_reviewer: "gpt-5.2", // TODO: replace model alias / wire to real endpoint
     implementer: "gpt-5.3-codex", // TODO: replace model alias / wire to real endpoint
-    diff_reviewer: "gpt-5.2", // TODO: replace model alias / wire to real endpoint
-    publisher: "gpt-5.3-codex", // TODO: replace model alias / wire to real endpoint
+    diff_reviewer: "gpt-5.3-codex", // TODO: replace model alias / wire to real endpoint
+    publisher: "gpt-5.2", // TODO: replace model alias / wire to real endpoint
   },
+  reasoning_effort: {
+    planner: "xhigh",
+    plan_reviewer: "xhigh",
+    implementer: "xhigh",
+    diff_reviewer: "xhigh",
+    publisher: "xhigh",
+  },
+  agent_transport: "codex_cli",
+  codex_cli_command: "codex",
+  codex_cli_sandbox_mode: "danger-full-access",
+  codex_cli_approval_policy: "never",
+  codex_cli_json_events: false,
   qa_timeout_seconds: 3600,
   full_auto: false,
 };
@@ -366,8 +379,17 @@ function loadConfig() {
   if (!config.models || typeof config.models !== "object") {
     throw new WorkflowError("config.yaml models must be an object", "CONFIG_ERROR");
   }
+  if (!config.reasoning_effort || typeof config.reasoning_effort !== "object") {
+    throw new WorkflowError("config.yaml reasoning_effort must be an object", "CONFIG_ERROR");
+  }
   if (typeof config.qa_timeout_seconds !== "number" || config.qa_timeout_seconds <= 0) {
     throw new WorkflowError("config.yaml qa_timeout_seconds must be a positive number", "CONFIG_ERROR");
+  }
+  if (!config.agent_transport || typeof config.agent_transport !== "string") {
+    throw new WorkflowError("config.yaml agent_transport must be a string", "CONFIG_ERROR");
+  }
+  if (config.agent_transport === "codex_cli" && !config.codex_cli_command) {
+    throw new WorkflowError("config.yaml codex_cli_command must be set for codex_cli transport", "CONFIG_ERROR");
   }
 
   return config;
@@ -616,6 +638,166 @@ function stubAgentResponse(role, input) {
   return { content: "" };
 }
 
+let CODEX_LOGIN_CHECKED = false;
+
+function toTomlBasicString(value) {
+  return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
+}
+
+function getConfiguredTransport() {
+  if (!ACTIVE_CONFIG) {
+    return "stub";
+  }
+  // Optional env override for quick local debugging.
+  if (process.env.CODEX_WORKFLOW_AGENT_TRANSPORT) {
+    return String(process.env.CODEX_WORKFLOW_AGENT_TRANSPORT).trim();
+  }
+  return ACTIVE_CONFIG.agent_transport || "stub";
+}
+
+function getReasoningEffortForRole(role) {
+  if (!ACTIVE_CONFIG) {
+    return "xhigh";
+  }
+  const map = ACTIVE_CONFIG.reasoning_effort || {};
+  return map[role] || ACTIVE_CONFIG.codex_cli_reasoning_effort_default || "xhigh";
+}
+
+function buildAgentPrompt(role, input, model) {
+  const payload = JSON.stringify(input || {}, null, 2);
+
+  return [
+    `You are the '${role}' role inside codex-workflow orchestration.`,
+    `Requested model alias: ${model}.`,
+    "Follow the role/task from INPUT_JSON exactly and return only the artifact content.",
+    "Always include DECISION_QUESTIONS_JSON as a ```json block with [] when no decisions are needed.",
+    "If role=implementer and mode=implementation, include a unified diff in a ```diff block whenever file edits are required.",
+    "Keep output compact and machine-parseable.",
+    "",
+    "INPUT_JSON",
+    "```json",
+    payload,
+    "```",
+  ].join("\n");
+}
+
+function ensureCodexCliLogin(codexCommand) {
+  if (CODEX_LOGIN_CHECKED) {
+    return;
+  }
+
+  // TODO: if your environment uses API key auth instead of CLI login, replace this with your auth bootstrap.
+  const status = spawnSync(codexCommand, ["login", "status"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+
+  if (status.error) {
+    throw new WorkflowError(`Failed to run '${codexCommand} login status': ${status.error.message}`, "AUTH_ERROR");
+  }
+  if (status.status !== 0) {
+    const details = (status.stderr || status.stdout || "").trim();
+    throw new WorkflowError(
+      `codex_cli transport requires active CLI auth. Run '${codexCommand} login'. ${details}`,
+      "AUTH_ERROR"
+    );
+  }
+
+  CODEX_LOGIN_CHECKED = true;
+}
+
+function callCodexCliAgent(role, input, model) {
+  const codexCommand = ACTIVE_CONFIG.codex_cli_command || "codex";
+  const prompt = buildAgentPrompt(role, input, model);
+  const outputFile = path.join(
+    os.tmpdir(),
+    `codex-workflow-${Date.now()}-${role}-${Math.random().toString(36).slice(2)}.last-message.md`
+  );
+
+  ensureCodexCliLogin(codexCommand);
+
+  const args = [
+    "exec",
+    "-C",
+    REPO_ROOT,
+    "-m",
+    model,
+    "--output-last-message",
+    outputFile,
+    "--skip-git-repo-check",
+  ];
+
+  if (ACTIVE_CONFIG.codex_cli_sandbox_mode) {
+    args.push("--sandbox", ACTIVE_CONFIG.codex_cli_sandbox_mode);
+  }
+  if (ACTIVE_CONFIG.codex_cli_json_events) {
+    args.push("--json");
+  }
+
+  if (ACTIVE_CONFIG.codex_cli_approval_policy) {
+    args.push("-c", `approval_policy=${toTomlBasicString(ACTIVE_CONFIG.codex_cli_approval_policy)}`);
+  }
+
+  const effort = getReasoningEffortForRole(role);
+  if (effort) {
+    args.push("-c", `model_reasoning_effort=${toTomlBasicString(effort)}`);
+  }
+
+  if (Array.isArray(ACTIVE_CONFIG.codex_cli_extra_config)) {
+    for (const item of ACTIVE_CONFIG.codex_cli_extra_config) {
+      if (item && typeof item === "string") {
+        args.push("-c", item);
+      }
+    }
+  }
+
+  args.push("-");
+
+  const result = spawnSync(codexCommand, args, {
+    cwd: REPO_ROOT,
+    input: prompt,
+    encoding: "utf8",
+    maxBuffer: 50 * 1024 * 1024,
+  });
+
+  if (result.error) {
+    throw new WorkflowError(`${codexCommand} exec failed: ${result.error.message}`, "AGENT_TRANSPORT_ERROR");
+  }
+
+  const stdout = result.stdout || "";
+  const stderr = result.stderr || "";
+
+  if (result.status !== 0) {
+    const details = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+    throw new WorkflowError(
+      `${codexCommand} exec failed for role=${role} (exit ${result.status}). ${details}`,
+      "AGENT_TRANSPORT_ERROR"
+    );
+  }
+
+  let content = "";
+  if (fileExists(outputFile)) {
+    content = readFile(outputFile);
+    try {
+      fs.unlinkSync(outputFile);
+    } catch (_err) {
+      // noop
+    }
+  }
+
+  if (!content.trim()) {
+    content = stdout;
+  }
+  if (!content.trim()) {
+    throw new WorkflowError(
+      `codex_cli transport returned empty content for role=${role}. TODO: verify CLI output contract.`,
+      "AGENT_TRANSPORT_ERROR"
+    );
+  }
+
+  return { content };
+}
+
 async function callAgent(role, input, modelOverride) {
   if (!ACTIVE_CONFIG) {
     throw new WorkflowError("Active config is not set before callAgent invocation", "CONFIG_ERROR");
@@ -627,13 +809,14 @@ async function callAgent(role, input, modelOverride) {
   }
 
   // TODO: replace model alias / wire to real endpoint.
-  // TODO: add real authentication handling (API keys, org/project headers, endpoint routing).
-  // TODO: integrate with Codex-CLI or OpenAI Platform API for production use.
-  const transport = process.env.CODEX_WORKFLOW_AGENT_TRANSPORT || "stub";
+  // TODO: if you move away from Codex CLI auth, wire dedicated API auth here.
+  const transport = getConfiguredTransport();
 
   let rawResponse;
   if (transport === "stub") {
     rawResponse = stubAgentResponse(role, input || {});
+  } else if (transport === "codex_cli") {
+    rawResponse = callCodexCliAgent(role, input || {}, model);
   } else {
     throw new WorkflowError(
       `Unsupported agent transport: ${transport}. TODO: wire transport to real endpoint`,

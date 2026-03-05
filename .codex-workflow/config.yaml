@@ -12,8 +12,21 @@ models:
   planner: "gpt-5.2"           # TODO: replace model alias / wire to real endpoint
   plan_reviewer: "gpt-5.2"     # TODO: replace model alias / wire to real endpoint
   implementer: "gpt-5.3-codex" # TODO: replace model alias / wire to real endpoint
-  diff_reviewer: "gpt-5.2"     # TODO: replace model alias / wire to real endpoint
-  publisher: "gpt-5.3-codex"   # TODO: replace model alias / wire to real endpoint
+  diff_reviewer: "gpt-5.3-codex" # TODO: replace model alias / wire to real endpoint
+  publisher: "gpt-5.2"         # TODO: replace model alias / wire to real endpoint
+reasoning_effort:
+  planner: "xhigh"
+  plan_reviewer: "xhigh"
+  implementer: "xhigh"
+  diff_reviewer: "xhigh"
+  publisher: "xhigh"
+agent_transport: "codex_cli"   # TODO: set to real provider/transport if not using Codex CLI
+codex_cli_command: "codex"     # TODO: adjust binary/path if different in your environment
+codex_cli_sandbox_mode: "danger-full-access"
+codex_cli_approval_policy: "never"
+codex_cli_json_events: false
+# TODO: optional additional codex config overrides, e.g. ["model_provider=\"openai\""]
+# codex_cli_extra_config: []
 qa_timeout_seconds: 3600
 full_auto: false
 ci_timeout_seconds: 120

@@ -18,6 +18,7 @@ This folder provides a full bootstrap scaffold for running story-based planning,
 - Node.js 18+
 - `git`
 - `gh` (GitHub CLI) for PR creation/update and check waiting when `use_gh_cli: true`
+- `codex` CLI for agent calls when `agent_transport: codex_cli`
 - Project verification toolchain matching `verification_commands` (default uses `pnpm`)
 
 No external Node dependencies are required by default.
@@ -28,6 +29,13 @@ From repo root:
 
 ```bash
 node .codex-workflow/scripts/orchestrator.js
+```
+
+For Codex CLI transport, authenticate once:
+
+```bash
+codex login
+codex login status
 ```
 
 ## Core behavior (as implemented)
@@ -96,7 +104,7 @@ If nothing remains staged after excluding run artifacts, publish skips commit/pu
 ## TODO markers you must wire for real usage
 
 - `scripts/orchestrator.js`:
-  - `callAgent(...)` transport/auth/model endpoint wiring
+  - `callAgent(...)` is wired to `codex exec` by default; replace transport if you need direct API calls
   - replace placeholder model aliases with real endpoint mapping
   - replace/extend patch application adapter to Codex-CLI/API output contract
 - `scripts/git-helpers.sh`:
@@ -111,6 +119,10 @@ If nothing remains staged after excluding run artifacts, publish skips commit/pu
 - Base/PR target: `main`
 - PR transport: GitHub CLI (`use_gh_cli: true`)
 - Required checks policy: `all_required`
+- Agent transport: `codex_cli` (CLI-auth based)
+- Role model mapping:
+  - planning/non-code roles (`planner`, `plan_reviewer`, `publisher`) -> `gpt-5.2` (`xhigh`)
+  - coding roles (`implementer`, `diff_reviewer`) -> `gpt-5.3-codex` (`xhigh`)
 - Verification commands:
   1. `pnpm install --frozen-lockfile`
   2. `pnpm build`
