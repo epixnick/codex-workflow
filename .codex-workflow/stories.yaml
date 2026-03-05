@@ -1,0 +1,6 @@
+stories:
+  - id: "001"
+    slug: "example-story"
+    title: "Example Story"
+    status: "todo"
+    depends_on: []
