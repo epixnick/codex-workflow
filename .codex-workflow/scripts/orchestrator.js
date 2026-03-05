@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const readline = require("readline");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const REPO_ROOT = process.cwd();
 const WORKFLOW_DIR = path.join(REPO_ROOT, ".codex-workflow");
@@ -56,6 +56,9 @@ const DEFAULT_CONFIG = {
 const MAX_LOOP_ATTEMPTS = 10;
 const DEFAULT_CI_TIMEOUT_SECONDS = 3600;
 let ACTIVE_CONFIG = null;
+let ACTIVE_RUNTIME = {
+  verbose: false,
+};
 
 class WorkflowError extends Error {
   constructor(message, code = "WORKFLOW_ERROR") {
@@ -75,6 +78,42 @@ class QATimeoutError extends WorkflowError {
 function log(step, message) {
   const now = new Date().toISOString();
   console.log(`[${now}] [${step}] ${message}`);
+}
+
+function isVerbose() {
+  return Boolean(ACTIVE_RUNTIME && ACTIVE_RUNTIME.verbose);
+}
+
+function verboseLog(step, message) {
+  if (!isVerbose()) {
+    return;
+  }
+  log(step, message);
+}
+
+function printUsage() {
+  console.log("Usage: node .codex-workflow/scripts/orchestrator.js [--verbose|-v] [--help|-h]");
+}
+
+function parseCliArgs(argv) {
+  const options = {
+    verbose: false,
+    help: false,
+  };
+
+  for (const arg of argv || []) {
+    if (arg === "--verbose" || arg === "-v") {
+      options.verbose = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      options.help = true;
+      continue;
+    }
+    throw new WorkflowError(`Unknown argument: ${arg}`, "CLI_ARGS_ERROR");
+  }
+
+  return options;
 }
 
 function ensureDir(dirPath) {
@@ -687,7 +726,55 @@ function createRunFolder(story) {
   };
 }
 
+async function runSpawnCommand(cmd, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd: options.cwd || REPO_ROOT,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.on("error", (error) => {
+      reject(new WorkflowError(`${cmd} failed to spawn: ${error.message}`));
+    });
+
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      if (options.streamStdout) {
+        process.stdout.write(text);
+      }
+    });
+
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      if (options.streamStderr) {
+        process.stderr.write(text);
+      }
+    });
+
+    child.on("close", (code) => {
+      resolve({
+        code: typeof code === "number" ? code : 1,
+        stdout,
+        stderr,
+      });
+    });
+
+    if (typeof options.input === "string") {
+      child.stdin.write(options.input);
+    }
+    child.stdin.end();
+  });
+}
+
 function runCommand(cmd, args, options = {}) {
+  if (isVerbose()) {
+    verboseLog("exec", `${cmd} ${args.join(" ")}`);
+  }
   const result = spawnSync(cmd, args, {
     cwd: options.cwd || REPO_ROOT,
     encoding: "utf8",
@@ -702,6 +789,21 @@ function runCommand(cmd, args, options = {}) {
   const code = typeof result.status === "number" ? result.status : 1;
   const stdout = result.stdout || "";
   const stderr = result.stderr || "";
+
+  if (isVerbose()) {
+    if (stdout.trim()) {
+      process.stdout.write(stdout);
+      if (!stdout.endsWith("\n")) {
+        process.stdout.write("\n");
+      }
+    }
+    if (stderr.trim()) {
+      process.stderr.write(stderr);
+      if (!stderr.endsWith("\n")) {
+        process.stderr.write("\n");
+      }
+    }
+  }
 
   if (!options.allowFailure && code !== 0) {
     throw new WorkflowError(`${cmd} ${args.join(" ")} failed (exit ${code})\n${stderr || stdout}`);
@@ -919,7 +1021,7 @@ function ensureCodexCliLogin(codexCommand) {
   CODEX_LOGIN_CHECKED = true;
 }
 
-function callCodexCliAgent(role, input, model) {
+async function callCodexCliAgent(role, input, model) {
   const codexCommand = ACTIVE_CONFIG.codex_cli_command || "codex";
   const prompt = buildAgentPrompt(role, input, model);
   const outputFile = path.join(
@@ -966,24 +1068,25 @@ function callCodexCliAgent(role, input, model) {
 
   args.push("-");
 
-  const result = spawnSync(codexCommand, args, {
+  verboseLog("agent", `Starting role=${role} model=${model} via codex_cli`);
+  if (isVerbose()) {
+    verboseLog("agent", `${codexCommand} ${args.join(" ")}`);
+  }
+
+  const result = await runSpawnCommand(codexCommand, args, {
     cwd: REPO_ROOT,
     input: prompt,
-    encoding: "utf8",
-    maxBuffer: 50 * 1024 * 1024,
+    streamStdout: isVerbose(),
+    streamStderr: isVerbose(),
   });
-
-  if (result.error) {
-    throw new WorkflowError(`${codexCommand} exec failed: ${result.error.message}`, "AGENT_TRANSPORT_ERROR");
-  }
 
   const stdout = result.stdout || "";
   const stderr = result.stderr || "";
 
-  if (result.status !== 0) {
+  if (result.code !== 0) {
     const details = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
     throw new WorkflowError(
-      `${codexCommand} exec failed for role=${role} (exit ${result.status}). ${details}`,
+      `${codexCommand} exec failed for role=${role} (exit ${result.code}). ${details}`,
       "AGENT_TRANSPORT_ERROR"
     );
   }
@@ -1008,6 +1111,8 @@ function callCodexCliAgent(role, input, model) {
     );
   }
 
+  verboseLog("agent", `Completed role=${role} model=${model}`);
+
   return { content };
 }
 
@@ -1029,7 +1134,7 @@ async function callAgent(role, input, modelOverride) {
   if (transport === "stub") {
     rawResponse = stubAgentResponse(role, input || {});
   } else if (transport === "codex_cli") {
-    rawResponse = callCodexCliAgent(role, input || {}, model);
+    rawResponse = await callCodexCliAgent(role, input || {}, model);
   } else {
     throw new WorkflowError(
       `Unsupported agent transport: ${transport}. TODO: wire transport to real endpoint`,
@@ -1710,6 +1815,24 @@ async function runStory(config, story) {
 }
 
 async function main() {
+  let cliOptions;
+  try {
+    cliOptions = parseCliArgs(process.argv.slice(2));
+  } catch (error) {
+    if (error instanceof WorkflowError && error.code === "CLI_ARGS_ERROR") {
+      console.error(error.message);
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
+    throw error;
+  }
+  if (cliOptions.help) {
+    printUsage();
+    return;
+  }
+  ACTIVE_RUNTIME = cliOptions;
+
   ensureDir(RUNS_DIR);
 
   const config = loadConfig();

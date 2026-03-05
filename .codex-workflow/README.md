@@ -31,6 +31,12 @@ From repo root:
 node .codex-workflow/scripts/orchestrator.js
 ```
 
+Verbose mode (prints detailed agent command output, including `codex exec` logs):
+
+```bash
+node .codex-workflow/scripts/orchestrator.js --verbose
+```
+
 Story input workflow:
 
 - add active stories as `.md` files under `.codex-workflow/input/`

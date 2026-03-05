@@ -75,11 +75,19 @@ depends_on:
 node .codex-workflow/scripts/orchestrator.js
 ```
 
+Optional mit detaillierten Logs (inkl. Agent-Calls):
+
+```bash
+node .codex-workflow/scripts/orchestrator.js --verbose
+```
+
 Das war's. Der Orchestrator:
 
 - synchronisiert `stories.yaml` automatisch aus `input/` (rekursiv)
 - ignoriert `input/archiv/`
 - verarbeitet die nächste aktive Story
+
+Mit `--verbose` siehst du zusätzlich die ausführliche Ausgabe der internen `codex exec`-Aufrufe im Terminal.
 
 ### 5) Story archivieren
 
