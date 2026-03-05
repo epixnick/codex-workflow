@@ -1,6 +1,6 @@
 # codex-workflow
 
-Dieses Repo enthaelt ein lauffaehiges Bootstrap fuer einen story-basierten Dev-Workflow mit Orchestrator, Agent-Rollen, Verification und PR-Publishing.
+Dieses Repo enthält ein lauffähiges Bootstrap für einen story-basierten Dev-Workflow mit Orchestrator, Agent-Rollen, Verification und PR-Publishing.
 
 Der zentrale Einstiegspunkt ist:
 
@@ -17,7 +17,7 @@ Der Workflow soll eine Story automatisch durch folgende Phasen bewegen:
 5. Verification
 6. Publish (Commit, Push, PR, Required Checks)
 
-Alles ist ueber `.codex-workflow/config.yaml` steuerbar.
+Alles ist über `.codex-workflow/config.yaml` steuerbar.
 
 ## Schnellstart
 
@@ -75,7 +75,7 @@ Kurzer Zweck je Datei:
 `orchestrator.js` macht pro Story (vereinfacht):
 
 1. `loadConfig()`
-2. `pickNextStory()` waehlt die kleinste `todo`-Story mit erfuellten `depends_on`
+2. `pickNextStory()` wählt die kleinste `todo`-Story mit erfüllten `depends_on`
 3. `createRunFolder()` legt `.codex-workflow/runs/{id}-{slug}` an
 4. Feature-Branch von `main` nach Pattern `feature/{id}-{slug}`
 5. Planning Loop:
@@ -89,11 +89,11 @@ Kurzer Zweck je Datei:
    - (wenn vorhanden) Patch-Anwendung im Working Tree
 7. Diff Review Loop:
    - diff_reviewer auf `git diff` + Plan
-   - bei `BLOCK` zurueck in Implementation
+   - bei `BLOCK` zurück in Implementation
 8. Verification:
-   - fuehrt `verification_commands` exakt aus `config.yaml` aus
+   - führt `verification_commands` exakt aus `config.yaml` aus
    - schreibt `verify_report.md` + command logs
-   - bei FAIL zurueck in Implementation
+   - bei FAIL zurück in Implementation
 9. Publish:
    - `publish_summary.md` erzeugen
    - committen, pushen, PR erstellen/aktualisieren via `gh`
@@ -129,8 +129,8 @@ Standard ist CLI-basierter Transport:
 Das bedeutet:
 
 - Orchestrator nutzt `codex exec`
-- Auth erfolgt ueber normale Codex-CLI-Session (`codex login`)
-- Login wird durch `codex login status` geprueft
+- Auth erfolgt über normale Codex-CLI-Session (`codex login`)
+- Login wird durch `codex login status` geprüft
 
 Wichtige Config-Keys:
 
@@ -146,7 +146,7 @@ Wenn ein Agent Decision Questions liefert, dann:
 
 - Ausgabe in Console
 - Persistenz als `pending_question_{N}.json` im Run-Ordner
-- Antwort moeglich per CLI oder `pending_question_{N}.answer.json`
+- Antwort möglich per CLI oder `pending_question_{N}.answer.json`
 
 Timeout-Regel:
 
@@ -155,9 +155,9 @@ Timeout-Regel:
   - `TIMEOUT_REPORT.md`
   - Story stoppt mit Status `blocked`
 
-## Verification pro Projekt ueberschreiben
+## Verification pro Projekt überschreiben
 
-Die Verification ist nicht hardcodiert. Es zaehlt nur die Liste in `config.yaml`:
+Die Verification ist nicht hardcodiert. Es zählt nur die Liste in `config.yaml`:
 
 ```yaml
 verification_commands:
@@ -184,7 +184,7 @@ Typische `status`-Werte in `stories.yaml`:
 
 Publish-Phase:
 
-1. staged alle Aenderungen
+1. staged alle Änderungen
 2. unstaget Run-Artefakte unter `.codex-workflow/runs`
 3. erzeugt einen Commit basierend auf `publish_summary.md`
 4. pusht Feature-Branch
@@ -196,35 +196,35 @@ Wichtig:
 - kein Auto-Merge
 - bei CI-Problemen Kommentar in PR + Stop
 
-## Haeufige Probleme
+## Häufige Probleme
 
 `ERR_PNPM_NO_PKG_MANIFEST`:
 
 - Ursache: kein `package.json` im Repo
-- Loesung: `package.json` anlegen oder `verification_commands` anpassen
+- Lösung: `package.json` anlegen oder `verification_commands` anpassen
 
 `codex_cli transport requires active CLI auth`:
 
 - Ursache: keine aktive Codex-Session
-- Loesung: `codex login` und erneut starten
+- Lösung: `codex login` und erneut starten
 
 `gh` PR/Checks Fehler:
 
-- `gh auth status` pruefen
-- Repo-Rechte und Branch-Protection pruefen
+- `gh auth status` prüfen
+- Repo-Rechte und Branch-Protection prüfen
 
-## Konfigurationsempfehlung fuer Modellupdates
+## Konfigurationsempfehlung für Modellupdates
 
-Wenn du spaeter Modelle wechselst, nur in `config.yaml` aendern:
+Wenn du später Modelle wechselst, nur in `config.yaml` ändern:
 
 - `models.*`
 - optional `reasoning_effort.*`
 
-Der Orchestrator-Code muss dafuer normalerweise nicht geaendert werden.
+Der Orchestrator-Code muss dafür normalerweise nicht geändert werden.
 
 ## Wichtige TODO-Marker
 
-Im Code sind bewusst TODO-Marker vorhanden fuer produktive Erweiterungen:
+Im Code sind bewusst TODO-Marker vorhanden für produktive Erweiterungen:
 
 - echte Endpoint-/Provider-Wiring (falls nicht Codex CLI)
 - ggf. API-Key/Auth-Flows statt CLI-Session
