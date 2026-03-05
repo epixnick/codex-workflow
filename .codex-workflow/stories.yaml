@@ -1,6 +1,6 @@
 stories:
   - id: "001"
     slug: "example-story"
-    title: "Example Story"
-    status: "done"
+    title: "Story 001: Example Story"
+    status: "todo"
     depends_on: []

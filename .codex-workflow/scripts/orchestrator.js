@@ -406,26 +406,240 @@ function saveStories(stories) {
   writeFile(STORIES_PATH, serializeStoriesYaml(stories));
 }
 
-function pickNextStory() {
-  const stories = loadStories();
-  const byId = new Map(stories.map((story) => [story.id, story]));
+function compareStories(a, b) {
+  const byId = Number(a.id) - Number(b.id);
+  if (byId !== 0) {
+    return byId;
+  }
+  return String(a.slug || "").localeCompare(String(b.slug || ""));
+}
 
-  const todoStories = stories
-    .filter((story) => story.status === "todo")
-    .sort((a, b) => Number(a.id) - Number(b.id));
+function storyTitleFromSlug(slug) {
+  return String(slug || "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
 
-  for (const candidate of todoStories) {
-    const deps = candidate.depends_on || [];
-    const depsSatisfied = deps.every((depId) => {
-      const dep = byId.get(`${depId}`);
-      return dep && dep.status === "done";
-    });
-    if (depsSatisfied) {
-      return candidate;
+function extractFirstMarkdownH1(markdown) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^#\s+(.+?)\s*$/);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+  return "";
+}
+
+function parseStoryFrontMatter(markdown, relPath) {
+  const text = String(markdown || "");
+  const match = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+  if (!match) {
+    return {};
+  }
+
+  const frontMatter = match[1];
+  const lines = frontMatter.split(/\r?\n/);
+  const meta = {};
+  let section = null;
+
+  for (const originalLine of lines) {
+    const noComment = stripInlineComment(originalLine).replace(/\t/g, "    ");
+    if (!noComment.trim()) {
+      continue;
+    }
+
+    const indent = noComment.match(/^ */)[0].length;
+    const trimmed = noComment.trim();
+
+    if (indent === 0) {
+      section = null;
+      const [key, rawValue] = splitKeyValue(trimmed);
+      if (!rawValue) {
+        if (key === "depends_on") {
+          meta.depends_on = [];
+          section = "depends_on";
+        } else {
+          throw new WorkflowError(
+            `Unsupported empty front matter key '${key}' in ${relPath}. Only depends_on list is supported.`,
+            "INPUT_SYNC_ERROR"
+          );
+        }
+      } else {
+        meta[key] = parseScalar(rawValue);
+      }
+      continue;
+    }
+
+    if (indent === 2 && section === "depends_on" && trimmed.startsWith("- ")) {
+      meta.depends_on.push(`${parseScalar(trimmed.slice(2))}`);
+      continue;
+    }
+
+    throw new WorkflowError(
+      `Unsupported front matter structure in ${relPath} near line: ${originalLine}`,
+      "INPUT_SYNC_ERROR"
+    );
+  }
+
+  return meta;
+}
+
+function listActiveInputStoryFiles() {
+  if (!fileExists(INPUT_DIR)) {
+    throw new WorkflowError(`Missing input directory at ${INPUT_DIR}`, "MISSING_INPUT_DIR");
+  }
+
+  const files = [];
+
+  function walk(dirPath) {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      const relPath = path.relative(INPUT_DIR, fullPath).split(path.sep).join("/");
+
+      if (entry.isDirectory()) {
+        if (relPath === "archiv" || relPath.startsWith("archiv/")) {
+          continue;
+        }
+        walk(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!entry.name.toLowerCase().endsWith(".md")) {
+        continue;
+      }
+
+      files.push({ fullPath, relPath });
     }
   }
 
-  return null;
+  walk(INPUT_DIR);
+  files.sort((a, b) => a.relPath.localeCompare(b.relPath));
+  return files;
+}
+
+function syncStoriesFromInput() {
+  const files = listActiveInputStoryFiles();
+  const stories = [];
+  const filePattern = /^(\d+)-([a-z0-9]+(?:-[a-z0-9]+)*)\.md$/;
+  const seenIds = new Map();
+
+  for (const file of files) {
+    const baseName = path.basename(file.relPath);
+    const match = baseName.match(filePattern);
+    if (!match) {
+      throw new WorkflowError(
+        `Invalid story filename '${file.relPath}'. Expected pattern: {id}-{slug}.md`,
+        "INPUT_SYNC_ERROR"
+      );
+    }
+
+    const id = match[1];
+    const slug = match[2];
+    if (seenIds.has(id)) {
+      const first = seenIds.get(id);
+      throw new WorkflowError(
+        `Duplicate story id '${id}' in input files: '${first}' and '${file.relPath}'`,
+        "INPUT_SYNC_ERROR"
+      );
+    }
+    seenIds.set(id, file.relPath);
+
+    const content = readFile(file.fullPath);
+    const frontMatter = parseStoryFrontMatter(content, file.relPath);
+    const depends = frontMatter.depends_on == null ? [] : frontMatter.depends_on;
+
+    if (!Array.isArray(depends)) {
+      throw new WorkflowError(
+        `Invalid depends_on in '${file.relPath}'. Expected array, got ${typeof depends}.`,
+        "INPUT_SYNC_ERROR"
+      );
+    }
+
+    stories.push({
+      id,
+      slug,
+      title: extractFirstMarkdownH1(content) || storyTitleFromSlug(slug),
+      status: "todo",
+      depends_on: depends.map((dep) => `${dep}`),
+    });
+  }
+
+  stories.sort(compareStories);
+
+  const byId = new Map(stories.map((story) => [story.id, story]));
+  for (const story of stories) {
+    for (const depId of story.depends_on || []) {
+      if (!byId.has(`${depId}`)) {
+        throw new WorkflowError(
+          `Story ${story.id}-${story.slug} depends_on '${depId}', but no active input story with that id exists.`,
+          "INPUT_SYNC_ERROR"
+        );
+      }
+    }
+  }
+
+  saveStories(stories);
+  log("input-sync", `Synced ${stories.length} story file(s) from input/ (excluding input/archiv/)`);
+  return stories;
+}
+
+function resolveStoryInputPath(story) {
+  const fileName = `${story.id}-${story.slug}.md`;
+  const matches = listActiveInputStoryFiles().filter((file) => path.basename(file.relPath) === fileName);
+  if (matches.length === 0) {
+    throw new WorkflowError(`Story input missing: ${fileName}`, "MISSING_STORY_INPUT");
+  }
+  if (matches.length > 1) {
+    throw new WorkflowError(
+      `Story input '${fileName}' is ambiguous (multiple files under input/): ${matches.map((m) => m.relPath).join(", ")}`,
+      "MISSING_STORY_INPUT"
+    );
+  }
+  return matches[0];
+}
+
+function pickNextStory(storiesInput) {
+  const stories = storiesInput || loadStories();
+  const todoStories = stories.filter((story) => story.status === "todo");
+  if (todoStories.length === 0) {
+    return null;
+  }
+
+  const byId = new Map(todoStories.map((story) => [story.id, story]));
+  const indegree = new Map(todoStories.map((story) => [story.id, 0]));
+  const edges = new Map(todoStories.map((story) => [story.id, []]));
+
+  for (const story of todoStories) {
+    const deps = story.depends_on || [];
+    for (const depId of deps) {
+      if (!byId.has(`${depId}`)) {
+        continue;
+      }
+      indegree.set(story.id, (indegree.get(story.id) || 0) + 1);
+      edges.get(`${depId}`).push(story.id);
+    }
+  }
+
+  const queue = todoStories
+    .filter((story) => (indegree.get(story.id) || 0) === 0)
+    .sort(compareStories);
+
+  if (queue.length === 0) {
+    throw new WorkflowError(
+      "No eligible todo story: depends_on graph contains a cycle among active input stories.",
+      "INPUT_SYNC_ERROR"
+    );
+  }
+
+  const first = queue[0];
+  return byId.get(first.id);
 }
 
 function updateStoryStatus(storyId, status, note = "") {
@@ -446,10 +660,8 @@ function createRunFolder(story) {
   const runDir = path.join(RUNS_DIR, runSlug);
   ensureDir(runDir);
 
-  const inputStoryPath = path.join(INPUT_DIR, `${story.id}-${story.slug}.md`);
-  if (!fileExists(inputStoryPath)) {
-    throw new WorkflowError(`Story input missing: ${inputStoryPath}`, "MISSING_STORY_INPUT");
-  }
+  const inputStory = resolveStoryInputPath(story);
+  const inputStoryPath = inputStory.fullPath;
 
   const storyMdPath = path.join(runDir, "story.md");
   fs.copyFileSync(inputStoryPath, storyMdPath);
@@ -457,6 +669,7 @@ function createRunFolder(story) {
   const metadata = {
     story_id: story.id,
     slug: story.slug,
+    input_rel_path: inputStory.relPath,
     started_at: new Date().toISOString(),
   };
   writeFile(path.join(runDir, "run_metadata.json"), JSON.stringify(metadata, null, 2));
@@ -1501,10 +1714,11 @@ async function main() {
 
   const config = loadConfig();
   ACTIVE_CONFIG = config;
-  const story = pickNextStory();
+  const syncedStories = syncStoriesFromInput();
+  const story = pickNextStory(syncedStories);
 
   if (!story) {
-    log("noop", "No eligible todo story found (check status/depends_on in stories.yaml)");
+    log("noop", "No eligible todo story found from active input files (input/ excluding input/archiv).");
     return;
   }
 

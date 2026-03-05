@@ -19,7 +19,7 @@ Der Workflow soll eine Story automatisch durch folgende Phasen bewegen:
 
 Alles ist über `.codex-workflow/config.yaml` steuerbar.
 
-## Installation und erster Run (einfach)
+## Quick Installation (einfach)
 
 Voraussetzungen:
 
@@ -27,14 +27,9 @@ Voraussetzungen:
 - git
 - gh (GitHub CLI)
 - codex CLI
-- projektabhängige Toolchain für `verification_commands` (Default: pnpm)
-- Git-Remote `origin` und Branch `main` müssen existieren (mit mindestens einem Commit)
+- `origin/main` existiert im Repo
 
-### 1) Muss ich den Ordner ins Repo kopieren?
-
-Ja. Der Workflow funktioniert nur, wenn der Ordner `.codex-workflow/` im **Root deines Ziel-Repos** liegt.
-
-Wenn du dieses Scaffold in ein anderes Repo übernehmen willst:
+### 1) Falls nötig: Workflow-Ordner ins Repo kopieren
 
 ```bash
 cp -R /pfad/zu/codex-workflow/.codex-workflow /pfad/zu/deinem-repo/
@@ -43,14 +38,7 @@ mkdir -p .codex-workflow/runs
 touch .codex-workflow/runs/.gitkeep
 ```
 
-Empfohlen für `.gitignore` im Ziel-Repo:
-
-```gitignore
-.codex-workflow/runs/*
-!.codex-workflow/runs/.gitkeep
-```
-
-### 2) Auth einrichten
+### 2) Einmal Auth anmelden
 
 ```bash
 codex login
@@ -58,102 +46,55 @@ codex login status
 gh auth status
 ```
 
-### 3) Projekt-Verification anpassen
+### 3) Story anlegen (nur Datei, kein YAML-Eintrag)
 
-In `.codex-workflow/config.yaml` muss `verification_commands` zu deinem Projekt passen.
+Lege eine Datei an:
 
-Default (pnpm):
-
-```yaml
-verification_commands:
-  - "pnpm install --frozen-lockfile"
-  - "pnpm build"
-  - "pnpm typecheck"
-  - "pnpm test"
-```
-
-Wenn dein Projekt kein pnpm nutzt, diese Liste ersetzen.
-
-### 4) Erste Story anlegen
-
-Du brauchst immer **zwei Stellen** mit exakt gleichem `id` + `slug`:
-
-1. Eintrag in `.codex-workflow/stories.yaml`
-2. Story-Datei in `.codex-workflow/input/{id}-{slug}.md`
+- `.codex-workflow/input/{id}-{slug}.md`
+- Beispiel: `.codex-workflow/input/001-auth-refactor.md`
 
 Namensregeln:
 
-- `id`: am besten dreistellig, aufsteigend (`001`, `002`, `003`, ...)
-- `slug`: lowercase-kebab-case (z. B. `auth-refactor`)
-- Input-Dateiname: exakt `{id}-{slug}.md` (z. B. `001-auth-refactor.md`)
+- `id` numerisch (`001`, `002`, `003`, ...)
+- `slug` lowercase-kebab-case
+- Dateiname exakt `{id}-{slug}.md`
 
-Beispiel `stories.yaml`:
+Optional für Abhängigkeiten:
 
-```yaml
-stories:
-  - id: "001"
-    slug: "auth-refactor"
-    title: "Auth Refactor"
-    status: "todo"
-    depends_on: []
+```md
+---
+depends_on:
+  - "001"
+---
+# Story 002: Auth Refactor
 ```
 
-Beispiel Story-Datei:
-
-- Pfad: `.codex-workflow/input/001-auth-refactor.md`
-- Inhalt: Ziel, Scope, Acceptance Criteria (frei formulierbar)
-
-### 5) Workflow starten
-
-Im Repo-Root:
+### 4) Workflow starten
 
 ```bash
 node .codex-workflow/scripts/orchestrator.js
 ```
 
-Der Orchestrator nimmt automatisch die nächste Story mit `status: todo`, deren `depends_on` erfüllt sind.
+Das war's. Der Orchestrator:
 
-### 6) Wo liegen Ergebnisse?
+- synchronisiert `stories.yaml` automatisch aus `input/` (rekursiv)
+- ignoriert `input/archiv/`
+- verarbeitet die nächste aktive Story
 
-Pro Story-Run in:
+### 5) Story archivieren
 
-- `.codex-workflow/runs/{id}-{slug}/`
+Wenn eine Story nicht mehr aktiv sein soll:
 
-Dort liegen u. a.:
-
-- `story.md`
-- `plan.md`
-- `plan_review.md`
-- `dev_plan_ack.md`
-- `diff_review.md`
-- `verify_report.md`
-- `publish_summary.md`
-- `pending_question_{N}.json` (falls Decision Q&A)
-- `TIMEOUT_REPORT.md` (bei Q&A-Timeout in `full_auto`)
-
-### 7) Mehrere Storys korrekt benennen
-
-Empfehlung:
-
-- `001-...`, `002-...`, `003-...` fortlaufend
-- pro Story genau ein Input-File mit gleichem `id`/`slug` wie in `stories.yaml`
-- `depends_on` mit Story-IDs füllen, wenn Reihenfolge erzwungen werden soll
-
-Beispiel:
-
-```yaml
-stories:
-  - id: "001"
-    slug: "project-bootstrap"
-    title: "Project Bootstrap"
-    status: "done"
-    depends_on: []
-  - id: "002"
-    slug: "auth-refactor"
-    title: "Auth Refactor"
-    status: "todo"
-    depends_on: ["001"]
+```bash
+mkdir -p .codex-workflow/input/archiv
+mv .codex-workflow/input/001-auth-refactor.md .codex-workflow/input/archiv/
 ```
+
+Beim nächsten Run wird sie nicht mehr in `stories.yaml` geführt.
+
+### 6) Wichtig für Verification
+
+`verification_commands` in `.codex-workflow/config.yaml` müssen zu deinem Projekt passen.
 
 ## Repo-Struktur
 
@@ -173,7 +114,7 @@ stories:
 Kurzer Zweck je Datei:
 
 - `config.yaml`: globales Verhalten (Modelle, Transport, Verification, Timeouts, Branching, PR, Checks)
-- `stories.yaml`: Story-Queue mit Status und Dependencies
+- `stories.yaml`: vom Orchestrator generierte Spiegeldatei der aktiven Inputs
 - `input/{id}-{slug}.md`: Story-Input
 - `runs/{id}-{slug}/`: Run-Artefakte und Logs
 - `templates/*.tpl`: machine-readable Ausgabeformate je Phase
@@ -186,26 +127,27 @@ Kurzer Zweck je Datei:
 `orchestrator.js` macht pro Story (vereinfacht):
 
 1. `loadConfig()`
-2. `pickNextStory()` wählt die kleinste `todo`-Story mit erfüllten `depends_on`
-3. `createRunFolder()` legt `.codex-workflow/runs/{id}-{slug}` an
-4. Feature-Branch von `main` nach Pattern `feature/{id}-{slug}`
-5. Planning Loop:
+2. synchronisiert `stories.yaml` aus `input/` (rekursiv, ohne `input/archiv/`)
+3. `pickNextStory()` wählt die nächste aktive Story
+4. `createRunFolder()` legt `.codex-workflow/runs/{id}-{slug}` an
+5. Feature-Branch von `main` nach Pattern `feature/{id}-{slug}`
+6. Planning Loop:
    - planner -> `plan.md`
    - plan_reviewer -> `plan_review.md`
    - `validator.js`
    - bei `VERDICT: BLOCK` erneuter Planner-Durchlauf
-6. Implementation Loop:
+7. Implementation Loop:
    - implementer readback -> `dev_plan_ack.md`
    - implementer implementation output
    - (wenn vorhanden) Patch-Anwendung im Working Tree
-7. Diff Review Loop:
+8. Diff Review Loop:
    - diff_reviewer auf `git diff` + Plan
    - bei `BLOCK` zurück in Implementation
-8. Verification:
+9. Verification:
    - führt `verification_commands` exakt aus `config.yaml` aus
    - schreibt `verify_report.md` + command logs
    - bei FAIL zurück in Implementation
-9. Publish:
+10. Publish:
    - `publish_summary.md` erzeugen
    - committen, pushen, PR erstellen/aktualisieren via `gh`
    - auf `required_checks` warten
@@ -282,14 +224,19 @@ Du kannst diese Liste pro Projekt ersetzen (z. B. `npm`, `pytest`, `go test`, `c
 
 ## Story-Lifecycle
 
-Typische `status`-Werte in `stories.yaml`:
+`stories.yaml` wird bei jedem Orchestrator-Start neu aus `input/` aufgebaut.
+
+Typische `status`-Werte während eines Runs sind:
 
 - `todo`
 - `in_progress`
 - `blocked`
 - `done`
 
-`depends_on` wird respektiert, bevor eine Story gestartet wird.
+Wichtig:
+
+- diese Status sind Laufzeitstatus und werden beim nächsten Start erneut aus den Input-Dateien abgeleitet (Reset auf `todo`)
+- wenn eine Story nicht mehr aktiv sein soll, Datei nach `input/archiv/` verschieben
 
 ## Commit/PR Verhalten
 

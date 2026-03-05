@@ -4,8 +4,8 @@ This folder provides a full bootstrap scaffold for running story-based planning,
 
 ## What is included
 
-- `stories.yaml`: source of truth for story queue and dependency gating.
-- `input/`: markdown story inputs (`{id}-{slug}.md`).
+- `stories.yaml`: generated mirror of active input stories.
+- `input/`: markdown story inputs (`{id}-{slug}.md`), recursively scanned.
 - `runs/`: runtime artifacts per story run (`.codex-workflow/runs/{id}-{slug}/...`).
 - `templates/*.tpl`: strict output formats for each workflow stage.
 - `scripts/orchestrator.js`: Node 18+ orchestrator.
@@ -31,6 +31,12 @@ From repo root:
 node .codex-workflow/scripts/orchestrator.js
 ```
 
+Story input workflow:
+
+- add active stories as `.md` files under `.codex-workflow/input/`
+- move completed stories to `.codex-workflow/input/archiv/`
+- do not edit `stories.yaml` manually; it is regenerated on every run
+
 For Codex CLI transport, authenticate once:
 
 ```bash
@@ -41,29 +47,31 @@ codex login status
 ## Core behavior (as implemented)
 
 1. Loads config from `.codex-workflow/config.yaml` via `loadConfig()`.
-2. Picks next eligible story via `pickNextStory()`:
-   - smallest `id` with `status: todo`
-   - `depends_on` must all be `done`
-3. Creates run folder via `createRunFolder(story)`.
-4. Ensures feature branch from `main` based on pattern `feature/{id}-{slug}`.
-5. Runs planning loop (`runPlanningLoop()`):
+2. Syncs `stories.yaml` from active `input/` files:
+   - recursively includes `*.md` under `input/`
+   - excludes `input/archiv/**`
+   - validates filename pattern `{id}-{slug}.md`
+3. Picks next eligible story via `pickNextStory()`.
+4. Creates run folder via `createRunFolder(story)`.
+5. Ensures feature branch from `main` based on pattern `feature/{id}-{slug}`.
+6. Runs planning loop (`runPlanningLoop()`):
    - planner -> `plan.md`
    - plan reviewer -> `plan_review.md`
    - validate with `validator.js`
    - loop while `VERDICT: BLOCK`
-6. Runs implementation loop (`runImplementationLoop()`):
+7. Runs implementation loop (`runImplementationLoop()`):
    - implementer readback -> `dev_plan_ack.md`
    - implementer implementation response
    - patch apply placeholder (`git apply` if patch provided)
-7. Runs diff review loop (`runDiffReview()`):
+8. Runs diff review loop (`runDiffReview()`):
    - reviewer sees uncommitted diff + plan
    - writes `diff_review.md`
    - loops on `VERDICT: BLOCK` by re-entering implementation
-8. Runs verification (`runVerification()`):
+9. Runs verification (`runVerification()`):
    - executes commands **exactly** from `config.yaml` in order
    - writes logs and `verify_report.md`
    - on failure returns to implementation loop
-9. Runs publishing (`runPublisher()`):
+10. Runs publishing (`runPublisher()`):
    - aggregates story/plan/diff review/verify report/diff stat
    - writes `publish_summary.md`
    - creates commit from summary title/body
